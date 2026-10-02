@@ -93,7 +93,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TacoConfigEntry) -> bool
 async def async_unload_entry(hass: HomeAssistant, entry: TacoConfigEntry) -> bool:
     """Unload a config entry."""
     await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    await entry.runtime_data.remove_listeners()
+    entry.runtime_data.remove_listeners()
     await entry.runtime_data.ble_coordinator.shutdown()  # private, meh.
 
     return True

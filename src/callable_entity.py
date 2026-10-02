@@ -86,28 +86,26 @@ class _BaseCallableCoordinatorEntity(CoordinatorEntity):
             _LOGGER.info("No function to consume data with for entity %s", self.name)
             return
 
-        if not self.coordinator.data:
-            _LOGGER.warning(
-                "No data received from coordinator for entity %s", self.name
-            )
-            return
+        if self.coordinator.data:
+            try:
+                next_value = self.value_fn(self.coordinator.data)
+            except:
+                self._attr_native_value = None
+                _LOGGER.exception(
+                    "Failed to update entity %s with data %s",
+                    self.name,
+                    self.coordinator.data,
+                )
+                raise
+            if next_value != self._attr_native_value:
+                _LOGGER.info("Setting entity %s to %s", self.name, next_value)
+                self._attr_native_value = next_value
+        else:
+            _LOGGER.debug("No data received from coordinator for entity %s", self.name)
 
-        try:
-            previous_value = getattr(self, "_attr_native_value", None)
-            next_value = self.value_fn(self.coordinator.data)
-            if previous_value == next_value:
-                return
-            _LOGGER.info("Setting entity %s to %s", self.name, next_value)
-            self._attr_native_value = next_value
-        except:
-            self._attr_native_value = None
-            _LOGGER.exception(
-                "Failed to update entity %s with data %s",
-                self.name,
-                self.coordinator.data,
-            )
-            raise
-
+        # Always write, even if the value is unchanged. The coordinator also
+        # calls this when it becomes unavailable, and skipping the write left
+        # entities showing stale values that Home Assistant would not act on.
         self.async_write_ha_state()
 
 

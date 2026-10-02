@@ -13,6 +13,7 @@ from bleak.backends.device import BLEDevice
 from bleak import BleakClient
 from bleak_retry_connector import establish_connection, BleakClientWithServiceCache
 
+from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant, callback
 
 from .gatt import Gatt, Characteristic, Property, ReadAction
@@ -140,7 +141,39 @@ class BleDataUpdateCoordinator:
             self._results[result.key] = result.value
 
     def _is_connected(self) -> bool:
-        return self._client and self._client.is_connected
+        return self._client is not None and self._client.is_connected
+
+    def _latest_ble_device(self) -> BLEDevice:
+        """Look the device up again, it may now be reachable through a different proxy."""
+        ble_device = bluetooth.async_ble_device_from_address(
+            self._hass, self._ble_device.address, connectable=True
+        )
+        if ble_device:
+            self._ble_device = ble_device
+        return self._ble_device
+
+    def _on_disconnect(self, _client: BleakClient) -> None:
+        """Bleak calls this synchronously, so schedule the async clear."""
+        self._hass.async_create_task(self.force_data_clear())
+
+    async def _drop_client(self) -> None:
+        """Forget a client that failed, so the next call reconnects instead of reusing it.
+
+        When the proxy's API connection dies, the client can keep reporting
+        is_connected while every request fails with "Not connected".
+        """
+        async with self._client_lock:
+            client, self._client = self._client, None
+        if client:
+            try:
+                await client.disconnect()
+            except Exception:  # The link is already broken, nothing more to do.
+                _LOGGER.debug(
+                    "Ignoring error disconnecting from device %s",
+                    self._ble_device.address,
+                    exc_info=True,
+                )
+        await self.force_data_clear()
 
     async def _make_client(self) -> BleakClient:
         async with self._client_lock:
@@ -148,12 +181,13 @@ class BleDataUpdateCoordinator:
                 try:
                     self._client = await establish_connection(
                         client_class = BleakClientWithServiceCache,
-                        device = self._ble_device,
+                        device = self._latest_ble_device(),
                         name = self._ble_device.address,
-                        disconnected_callback = self.force_data_clear
+                        disconnected_callback = self._on_disconnect,
+                        ble_device_callback = self._latest_ble_device,
                     )
                 except:
-                    self.force_data_clear()
+                    await self.force_data_clear()
                     _LOGGER.exception(
                         "Failed to setup ble client for device %s",
                         self._ble_device.address,
@@ -242,6 +276,7 @@ class BleDataUpdateCoordinator:
                     )
         except:
             _LOGGER.exception("Failed to poll device %s", self._ble_device.address)
+            await self._drop_client()
             raise
 
         async with self._results_lock:
@@ -276,6 +311,7 @@ class BleDataUpdateCoordinator:
             _LOGGER.exception(
                 "Failed to write data to device %s", self._ble_device.address
             )
+            await self._drop_client()
             raise
 
     async def force_data_update(self) -> None:

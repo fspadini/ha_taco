@@ -41,8 +41,8 @@ def _value_fn(
     """Returns the zone value at index, 1 based."""
 
     # Read from internal state for remaining lifetime of entity.
-    # Making a few assumptions that taco_init.py will correctly
-    # match this by sending a write all force on zones to False on boot.
+    # The Taco has no force off command, so after a switch is turned off
+    # the zone stays forced until its 5 minute force expires.
     #
     # TLDR, Home Assistant is the authority and source of truth for switches.
     return taco_runtime_data.force_zone_on[index - 1]
