@@ -12,6 +12,7 @@ from homeassistant.components.switch import (
 )
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
 )
@@ -21,6 +22,7 @@ from .src.taco_device_info import create_device_info, create_entity_id
 from .src.taco_gatt_read_transform import (
     ZONE_COUNT,
     NETWORK_DIAGNOSTIC_FORCE_ZONE_STATUS,
+    supports_force_zones,
 )
 from .src.callable_entity import (
     CallableSwitch,
@@ -89,6 +91,15 @@ def _make_zone_switch(
     )
 
 
+def _remove_switches(hass: HomeAssistant, entry: TacoConfigEntry) -> None:
+    """Remove force switches created by earlier versions, so they don't linger as unavailable."""
+
+    registry = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity.domain == "switch":
+            registry.async_remove(entity.entity_id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: TacoConfigEntry,
@@ -105,6 +116,13 @@ async def async_setup_entry(
         _LOGGER.info(
             "No password provided to Taco, so no switches or buttons are enabled."
         )
+        return
+
+    if not supports_force_zones(data):
+        _LOGGER.info(
+            "This Taco cannot force zones on, so no force switches are enabled."
+        )
+        _remove_switches(hass, entry)
         return
 
     # Note, we aren't actually guaranteed to have any

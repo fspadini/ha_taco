@@ -103,6 +103,18 @@ def read_product_id_transform(bytez: bytearray) -> ReadResult:
     )
 
 
+def supports_force_zones(data: dict[str, any]) -> bool:
+    """Whether the device can force zones on.
+
+    The Taco app only offers forcing zones on SR controllers, and ZVC
+    controllers reject the force write (GATT error 252). If the product
+    is unknown, assume it can, as before.
+    """
+
+    product_info = data.get(TACO_PRODUCT_INFO)
+    return not product_info or product_info.family != "ZVC"
+
+
 ZONE_COUNT = "network_zone_count"
 
 
