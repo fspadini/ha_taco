@@ -105,6 +105,7 @@ _PREVIOUS_ACTIONS_KEY = "previous_actions"
 _PREVIOUS_WRITE_TIME_KEY = "previous_write_time"
 _RETRY_AT_KEY = "retry_at"
 _RETRY_DELAY_KEY = "retry_delay"
+_FAILURES_KEY = "failures"
 
 # The Taco times out after 5 minutes, so resend just a bit before.
 _KEEP_ALIVE_INTERVAL = timedelta(minutes=4)
@@ -112,6 +113,10 @@ _KEEP_ALIVE_INTERVAL = timedelta(minutes=4)
 # After a failed write, wait this long before trying again, doubling each time.
 _MIN_RETRY_DELAY = timedelta(seconds=5)
 _MAX_RETRY_DELAY = timedelta(minutes=1)
+
+# Give up after this many failed writes in a row (about 75 seconds of retries),
+# and turn the force switches off so they show the zones are not forced.
+_MAX_WRITE_ATTEMPTS = 5
 
 
 async def _loop(state: dict, runtime_data: TacoRuntimeData):
@@ -141,19 +146,37 @@ async def _loop(state: dict, runtime_data: TacoRuntimeData):
     try:
         await _send_write_requests(actions, runtime_data.ble_coordinator)
     except Exception as err:  # Retry later, rather than every second.
+        failures = state.get(_FAILURES_KEY, 0) + 1
+        if failures >= _MAX_WRITE_ATTEMPTS:
+            _LOGGER.error(
+                "Giving up forcing zones on for device %s after %s attempts, "
+                "turning the force switches off: %s",
+                runtime_data.address,
+                failures,
+                err,
+            )
+            runtime_data.force_zone_on[:] = [False] * len(runtime_data.force_zone_on)
+            state.clear()
+            runtime_data.update_coordinator.async_update_listeners()
+            return
+
+        state[_FAILURES_KEY] = failures
         retry_delay = min(
             state.get(_RETRY_DELAY_KEY, _MIN_RETRY_DELAY / 2) * 2, _MAX_RETRY_DELAY
         )
         state[_RETRY_DELAY_KEY] = retry_delay
         state[_RETRY_AT_KEY] = now + retry_delay
         _LOGGER.warning(
-            "Failed to force zones on for device %s, retrying in %s: %s",
+            "Failed to force zones on for device %s (attempt %s of %s), retrying in %s: %s",
             runtime_data.address,
+            failures,
+            _MAX_WRITE_ATTEMPTS,
             retry_delay,
             err,
         )
         return
 
+    state.pop(_FAILURES_KEY, None)
     state.pop(_RETRY_DELAY_KEY, None)
     state.pop(_RETRY_AT_KEY, None)
     state[_PREVIOUS_ACTIONS_KEY] = actions
