@@ -230,13 +230,15 @@ class BleDataUpdateCoordinator:
             raise
 
         # These are characteristics that we are expected to read just once
-        # when we first connect to the device.
+        # when we first connect to the device. Subscribed characteristics are
+        # read too, otherwise they stay unknown until their value next changes.
         index_gatt_characteristics = [
                 characteristic
                 for service in self._gatt.services
                 for characteristic in service.characteristics
                 if Property.READ in characteristic.properties
-                and characteristic.read_action == ReadAction.INDEX
+                and characteristic.read_action
+                in (ReadAction.INDEX, ReadAction.SUBSCRIBE)
             ]
         try:
             async with asyncio.TaskGroup() as group:
@@ -313,6 +315,30 @@ class BleDataUpdateCoordinator:
             )
             await self._drop_client()
             raise
+
+    async def read(self, uuid: str) -> any:
+        """Read one characteristic now and return its transformed value."""
+
+        characteristic = next(
+            characteristic
+            for service in self._gatt.services
+            for characteristic in service.characteristics
+            if characteristic.uuid == uuid
+        )
+        client = await self._make_client()
+        try:
+            bytez = await client.read_gatt_char(uuid)
+        except:
+            _LOGGER.exception(
+                "Failed to read data from device %s", self._ble_device.address
+            )
+            await self._drop_client()
+            raise
+
+        _LOGGER.info("For GATT uuid %s, got bytes %s", uuid, bytez)
+        result = characteristic.read_transform(bytez)
+        await self._consume_result(result)
+        return result.value
 
     async def force_data_update(self) -> None:
         """Set a timestamp so that home assistant thinks there is new data."""

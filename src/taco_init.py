@@ -17,6 +17,7 @@ from .taco_gatt_write_transform import (
 )
 from .taco_config_entry import TacoRuntimeData
 from .taco_gatt_read_transform import (
+    DeviceStatus,
     ZoneInfo,
     NETWORK_DEVICE_INDEX
 )
@@ -24,6 +25,43 @@ from .ble_data_update_coordinator import BleDataUpdateCoordinator
 
 
 _LOGGER = logging.getLogger(__name__)
+
+# The password login state (td_status_char), see DeviceStatus.
+_DEVICE_STATUS_UUID = "38f63145-02b6-403c-810c-7e1253f474eb"
+
+
+class TacoNotAuthenticated(Exception):
+    """The device did not accept the password, or is locked out."""
+
+
+async def _read_device_status(ble_coordinator: BleDataUpdateCoordinator) -> DeviceStatus:
+    """Read the login state, giving the device a moment to process the password."""
+
+    for _ in range(3):
+        status = await ble_coordinator.read(_DEVICE_STATUS_UUID)
+        if status.authenticated or status.locked or status.long_locked:
+            return status
+        await asyncio.sleep(0.2)
+    return status
+
+
+async def _authenticate(
+    password: MaskedString, ble_coordinator: BleDataUpdateCoordinator
+) -> None:
+    """Write the password, then check the device actually accepted it.
+
+    The password write itself succeeds even when the password is wrong,
+    the result only shows up in the status flags.
+    """
+
+    await ble_coordinator.write([WriteRequest(PROVIDE_PASSWORD, extra=password)])
+    status = await _read_device_status(ble_coordinator)
+    if status.locked or status.long_locked:
+        raise TacoNotAuthenticated(
+            f"the device is locked out after too many password attempts ({status})"
+        )
+    if not status.authenticated:
+        raise TacoNotAuthenticated(f"the device did not accept the password ({status})")
 
 
 async def _validate_ping(ble_coordinator: BleDataUpdateCoordinator):
@@ -57,6 +95,22 @@ async def _validate_password(password: MaskedString | None, ble_coordinator: Ble
     except Exception as err:
         raise ConfigEntryAuthFailed(err) from err
 
+    # Only report the login state for now, rather than failing setup,
+    # so sensors keep working while the status flags are confirmed.
+    try:
+        status = await _read_device_status(ble_coordinator)
+    except Exception:  # Reading the status is diagnostic only.
+        _LOGGER.warning("Could not read the password status", exc_info=True)
+        return
+    if status.authenticated:
+        _LOGGER.info("Password accepted (%s)", status)
+    else:
+        _LOGGER.error(
+            "Password not accepted (%s), forcing zones on will fail. "
+            "Check the password printed inside the green cover.",
+            status,
+        )
+
 
 async def send_initial_write_requests(runtime_data: TacoRuntimeData):
     """Starts communication with the taco, validating passwords and connections."""
@@ -67,9 +121,9 @@ async def send_initial_write_requests(runtime_data: TacoRuntimeData):
 def _create_write_requests(runtime_data: TacoRuntimeData) -> list[WriteRequest]:
     """The write actions that should take place upon a successful loop.
 
-    The Taco has no force off command and rejects a force with no zones
-    (GATT error 252, write request rejected). So when no zone is forced
-    nothing is sent, and the last force simply expires after 5 minutes.
+    The Taco has no force off command (the app never sends a force with
+    no zones). So when no zone is forced nothing is sent, and the last
+    force simply expires after 5 minutes.
     """
 
     if not any(runtime_data.force_zone_on):
@@ -98,7 +152,11 @@ async def _send_write_requests(
         len(actions),
         actions,
     )
-    await ble_coordinator.write(actions)
+    for action in actions:
+        if action.action == PROVIDE_PASSWORD:
+            await _authenticate(action.extra, ble_coordinator)
+        else:
+            await ble_coordinator.write([action])
 
 
 _PREVIOUS_ACTIONS_KEY = "previous_actions"
@@ -145,19 +203,14 @@ async def _loop(state: dict, runtime_data: TacoRuntimeData):
 
     try:
         await _send_write_requests(actions, runtime_data.ble_coordinator)
+    except TacoNotAuthenticated as err:
+        # Don't retry, every retry is another password attempt.
+        _give_up(state, runtime_data, f"{err}, check the password")
+        return
     except Exception as err:  # Retry later, rather than every second.
         failures = state.get(_FAILURES_KEY, 0) + 1
         if failures >= _MAX_WRITE_ATTEMPTS:
-            _LOGGER.error(
-                "Giving up forcing zones on for device %s after %s attempts, "
-                "turning the force switches off: %s",
-                runtime_data.address,
-                failures,
-                err,
-            )
-            runtime_data.force_zone_on[:] = [False] * len(runtime_data.force_zone_on)
-            state.clear()
-            runtime_data.update_coordinator.async_update_listeners()
+            _give_up(state, runtime_data, f"{err} (after {failures} attempts)")
             return
 
         state[_FAILURES_KEY] = failures
@@ -181,6 +234,19 @@ async def _loop(state: dict, runtime_data: TacoRuntimeData):
     state.pop(_RETRY_AT_KEY, None)
     state[_PREVIOUS_ACTIONS_KEY] = actions
     state[_PREVIOUS_WRITE_TIME_KEY] = now
+
+
+def _give_up(state: dict, runtime_data: TacoRuntimeData, reason: str) -> None:
+    """Stop forcing, and turn the switches off so they show the zones are not forced."""
+
+    _LOGGER.error(
+        "Giving up forcing zones on for device %s, turning the force switches off: %s",
+        runtime_data.address,
+        reason,
+    )
+    runtime_data.force_zone_on[:] = [False] * len(runtime_data.force_zone_on)
+    state.clear()
+    runtime_data.update_coordinator.async_update_listeners()
 
 
 def _make_tick(state: dict, runtime_data: TacoRuntimeData):

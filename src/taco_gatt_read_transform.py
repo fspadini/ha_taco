@@ -250,3 +250,30 @@ def read_network_device_index_transform(bytez: bytearray) -> ReadResult:
     """Does nothing with the bytearray since we just write it back out again."""
 
     return ReadResult(NETWORK_DEVICE_INDEX, bytez)
+
+
+DEVICE_STATUS = "device_status"
+
+
+@dataclass
+class DeviceStatus:
+    """The password login state of the device."""
+
+    authenticated: bool  # The password was accepted
+    locked: bool  # Too many wrong password attempts
+    long_locked: bool
+
+
+def read_device_status_transform(bytez: bytearray) -> ReadResult:
+    """Converts the little endian status flags to a DeviceStatus."""
+    _assert_bytearray_len(bytez, 2)
+
+    flags = int.from_bytes(bytez[:2], "little")
+    return ReadResult(
+        DEVICE_STATUS,
+        DeviceStatus(
+            authenticated=_is_byte_match(flags, 0x200),
+            locked=_is_byte_match(flags, 0x100),
+            long_locked=_is_byte_match(flags, 0x400),
+        ),
+    )

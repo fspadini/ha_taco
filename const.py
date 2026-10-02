@@ -15,6 +15,7 @@ from .src.taco_gatt_read_transform import (
     read_log_transform,
     read_network_aux1_transform,
     read_network_aux2_transform,
+    read_device_status_transform,
 )
 from .src.taco_gatt_write_transform import (
     write_password_transform,
@@ -56,6 +57,8 @@ _TACO_SERVICES = [
                 uuid="38f63145-02b6-403c-810c-7e1253f474eb",
                 name="status",
                 properties=[Property.READ, Property.NOTIFY],
+                read_action=ReadAction.SUBSCRIBE,
+                read_transform=read_device_status_transform,
             ),
             Characteristic(
                 uuid="38f63146-02b6-403c-810c-7e1253f474eb",
