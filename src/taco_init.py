@@ -29,6 +29,9 @@ _LOGGER = logging.getLogger(__name__)
 # The password login state (td_status_char), see DeviceStatus.
 _DEVICE_STATUS_UUID = "38f63145-02b6-403c-810c-7e1253f474eb"
 
+# Selects which networked controller indexed characteristics address.
+_NETWORK_DEVICE_INDEX_UUID = "1b423159-e0eb-4d9e-a86b-dcabcc3565b9"
+
 
 class TacoNotAuthenticated(Exception):
     """The device did not accept the password, or is locked out."""
@@ -62,6 +65,19 @@ async def _authenticate(
         )
     if not status.authenticated:
         raise TacoNotAuthenticated(f"the device did not accept the password ({status})")
+
+
+async def _select_device(ble_coordinator: BleDataUpdateCoordinator) -> None:
+    """Select this controller for indexed commands such as forcing zones.
+
+    The app writes the device index right before every indexed command,
+    after logging in, rather than relying on an earlier selection.
+    """
+
+    network_device_index = await ble_coordinator.read(_NETWORK_DEVICE_INDEX_UUID)
+    await ble_coordinator.write(
+        [WriteRequest(PING_NETWORK_DEVICE_INDEX, extra=network_device_index)]
+    )
 
 
 async def _validate_ping(ble_coordinator: BleDataUpdateCoordinator):
@@ -155,8 +171,10 @@ async def _send_write_requests(
     for action in actions:
         if action.action == PROVIDE_PASSWORD:
             await _authenticate(action.extra, ble_coordinator)
-        else:
-            await ble_coordinator.write([action])
+            continue
+        if action.action == FORCE_ZONE_ON:
+            await _select_device(ble_coordinator)
+        await ble_coordinator.write([action])
 
 
 _PREVIOUS_ACTIONS_KEY = "previous_actions"
