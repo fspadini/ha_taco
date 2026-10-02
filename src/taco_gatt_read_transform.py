@@ -289,3 +289,58 @@ def read_device_status_transform(bytez: bytearray) -> ReadResult:
             long_locked=_is_byte_match(flags, 0x400),
         ),
     )
+
+
+def _decode_text(bytez: bytearray) -> str:
+    """Decode a NUL padded string, blank if it was never set."""
+
+    text = bytes(bytez).split(b"\x00", 1)[0].decode("utf-8", errors="replace").strip()
+    if "�" in text or not text.isprintable():
+        return ""
+    return text
+
+
+ZONE_NAMES = "zone_names"
+
+
+def read_network_zone_names_transform(bytez: bytearray) -> ReadResult:
+    """Converts the 6 zone names (20 bytes each) to a list, blank where not set."""
+
+    # Names are only cosmetic, so tolerate a short read rather than failing setup.
+    bytez = bytearray(bytez).ljust(120, b"\x00")
+    return ReadResult(
+        ZONE_NAMES, [_decode_text(bytez[i : i + 20]) for i in range(0, 120, 20)]
+    )
+
+
+DEVICE_NAME = "device_name"
+
+
+def read_device_name_transform(bytez: bytearray) -> ReadResult:
+    """Converts the device name set in the Taco app to a string."""
+    return ReadResult(DEVICE_NAME, _decode_text(bytez))
+
+
+DEVICE_LOCATION = "device_location"
+
+
+def read_device_location_transform(bytez: bytearray) -> ReadResult:
+    """Converts the device location set in the Taco app to a string."""
+    return ReadResult(DEVICE_LOCATION, _decode_text(bytez))
+
+
+def zone_entity_name(key: str, data: dict[str, any]) -> str:
+    """Name a ZONE_n or THERMOSTAT_n entity after its zone name, eg "Kitchen zone".
+
+    Falls back to the key when the zone has no name set in the Taco app.
+    """
+
+    kind, _, index = key.rpartition("_")
+    if kind not in ("ZONE", "THERMOSTAT") or not index.isdigit():
+        return key
+
+    names = data.get(ZONE_NAMES) or []
+    position = int(index) - 1
+    if position < len(names) and names[position]:
+        return f"{names[position]} {kind.lower()}"
+    return key

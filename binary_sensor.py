@@ -23,6 +23,10 @@ from .src.taco_gatt_read_transform import (
     ZoneInfo,
     NETWORK_AUX1,
     NETWORK_AUX2,
+    DEVICE_NAME,
+    DEVICE_LOCATION,
+    ZONE_NAMES,
+    zone_entity_name,
 )
 from .src.callable_entity import CallableBinarySensor, CallableDescription
 
@@ -125,11 +129,19 @@ async def async_setup_entry(
     # Home Assistant doesn't like it when we try to wait
     # for the data, or throw ConfigEntryNotReady exceptions.
 
+    _LOGGER.info(
+        "Taco %s reports name %r, location %r, zone names %s",
+        taco_runtime_data.address,
+        data.get(DEVICE_NAME),
+        data.get(DEVICE_LOCATION),
+        data.get(ZONE_NAMES),
+    )
+
     async_add_entities(
         CallableBinarySensor(
             update_coordinator,
             description,
-            name=description.entity_description.key,
+            name=zone_entity_name(description.entity_description.key, data),
             unique_id=create_entity_id(entry, description),
             device_info=create_device_info(DOMAIN, entry),
         )

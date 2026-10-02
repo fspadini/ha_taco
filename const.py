@@ -16,6 +16,9 @@ from .src.taco_gatt_read_transform import (
     read_network_aux1_transform,
     read_network_aux2_transform,
     read_device_status_transform,
+    read_network_zone_names_transform,
+    read_device_name_transform,
+    read_device_location_transform,
 )
 from .src.taco_gatt_write_transform import (
     write_password_transform,
@@ -64,11 +67,15 @@ _TACO_SERVICES = [
                 uuid="38f63146-02b6-403c-810c-7e1253f474eb",
                 name="deviceName",
                 properties=[Property.READ, Property.WRITE],
+                read_action=ReadAction.INDEX,
+                read_transform=read_device_name_transform,
             ),
             Characteristic(
                 uuid="38f63147-02b6-403c-810c-7e1253f474eb",
                 name="location",
                 properties=[Property.READ, Property.WRITE],
+                read_action=ReadAction.INDEX,
+                read_transform=read_device_location_transform,
             ),
             Characteristic(
                 uuid="38f63148-02b6-403c-810c-7e1253f474eb",
@@ -162,6 +169,8 @@ _TACO_SERVICES = [
                 uuid="1b423149-e0eb-4d9e-a86b-dcabcc3565b9",
                 name="networkZoneNames",
                 properties=[Property.READ, Property.WRITE, Property.EXTENDED_PROPS],
+                read_action=ReadAction.INDEX,
+                read_transform=read_network_zone_names_transform,
             ),
             Characteristic(
                 uuid="1b42314b-e0eb-4d9e-a86b-dcabcc3565b9",
